@@ -1,0 +1,995 @@
+---
+title: "Organizational Network Analysis"
+author: "Lakshmi"
+date: "2025-07-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 🕸️ Intra-Organizational Network Analysis: A Case Study of a Consulting Firm
+
+This project analyzes the internal advice-seeking network of 46 employees in a consulting company (Cross & Parker, 2004) to understand how information flows within the organization. The goal is to identify central individuals, bottlenecks, and structural patterns based on attributes such as role and gender.
+
+I used two weighted, static, directed, one-mode networks:
+
+### 1. **Information Frequency Network**
+In the first network, the ties are differentiated on a scale from 0 to 5 in terms of frequency of information or advice requests 
+
+(“Please indicate how often you have turned to this person for information or advice on work-related topics in the past three months”). 
+
+    - 0: Don't know this person  
+    - 1: Never  
+    - 2: Seldom  
+    - 3: Sometimes  
+    - 4: Often  
+    - 5: Very Often  
+
+### 2. **Perceived Expertise Value Network**
+
+In the second network, ties are differentiated in terms of the value placed on the information or advice received 
+
+(“For each person in the list below, please show how strongly you agree or disagree with the following statement: In general, this person has expertise in areas that are important in the kind of work I do.”). 
+
+    - 0: Don't know this person  
+    - 1: Strongly Disagree  
+    - 2: Disagree  
+    - 3: Neutral  
+    - 4: Agree  
+    - 5: Strongly Agree  
+
+    
+Throughout this notebook, I used these networks to explore:
+- Centrality patterns (who is influential)
+- Attribute-based differences (e.g., by role or gender)
+- Structural efficiency and gaps
+- Business implications for improving collaboration
+
+```{r}
+# SETUP
+#install.packages("sna")        
+#install.packages("intergraph")  
+#install.packages("netdiffuseR")  
+#install.packages("gplots") 
+
+
+## Loading in required packages
+# --- Core network analysis & plotting ---
+library(igraph) # For building and analyzing network graphs
+library(ggraph) # For visualization of network graphs
+
+# --- Data manipulation & Visualization ---
+library(dplyr) # For data manipulation
+library(readxl) # To import Excel files into R
+library(ggplot2) # For general-purpose data visualization
+library(gplots) # For enhanced plotting tools like heatmaps
+library(patchwork) #For side-by-side graphs
+
+
+# --- Advanced modeling & diffusion ---
+library(sna) # Social network analysis: for further network analysis
+library(intergraph) # To convert between igraph and statnet (network) objects
+library(netdiffuseR) # For diffusion simulations and threshold models
+
+```
+
+## Data Loading
+
+I've loaded three components of the dataset:
+
+- `edges_info`: Edge list for the **information-seeking** network (frequency of advice).
+- `edges_value`: Edge list for the **expertise-value** network (perceived value of advice).
+- `nodes`: Node list containing employee attributes such as **role**, **gender**, and **location**.
+
+```{r}
+## Loading in Information seeking data
+setwd("C:/Users/laksh/Desktop/projects/ONA/.")
+edges_info <- readxl::read_excel("edge_list_info.xlsx")
+names(edges_info)
+
+## Loading in Value Perception edge data
+edges_value <- readxl::read_excel("edge_list_value.xlsx")
+names(edges_value)
+
+## Loading in Node and node attribute data
+nodes <- readxl::read_excel("node_list.xlsx")
+names(nodes)
+
+# Renaming 'value' to 'weight' for automatic igraph compatibility 
+colnames(edges_info)[colnames(edges_info) == "value"] = "weight"
+colnames(edges_value)[colnames(edges_value) == "value"] ="weight"
+
+summary(edges_info)
+summary(edges_value)
+summary(nodes)
+```
+### Node Attribute Metadata
+
+The node list includes key employee attributes encoded numerically. Below is the mapping:
+
+| Attribute     | Code | Meaning               |
+|---------------|------|------------------------|
+| **org_level** | 1    | Research Assistant     |
+|               | 2    | Junior Consultant      |
+|               | 3    | Senior Consultant      |
+|               | 4    | Managing Consultant    |
+|               | 5    | Partner                |
+| **gender**    | 1    | Male                   |
+|               | 2    | Female                 |
+| **region**    | 1    | Europe                 |
+|               | 2    | USA                    |
+
+The summary shows that the edge weights are on a 0–5 scale and the node data is cleanly structured for merging with the network.
+
+This project mainly focuses on the organizational level and gender attributes for its analysis.
+
+
+## Creating Network Objects
+
+Below, I've created two `igraph` objects from the edge lists and node attributes:
+
+- `net_info`: the information-seeking network, where edge weights represent **frequency** of advice (0–5 scale).
+- `net_value`: the expertise-value network, where edge weights represent the **perceived value** of advice (0–5 scale).
+
+Both networks are:
+- **Directed**: Edges have a direction (from source to target)
+- **Weighted**: Edges carry meaning based on the 0–5 rating scale
+- **One-mode**: All nodes are employees (no bipartite structure)
+
+
+```{r}
+## Creating Network Objects from Edge Lists
+
+# Creating a directed, weighted network for the information-seeking (frequency) data
+net_info <- graph_from_data_frame(edges_info, directed = TRUE, vertices = nodes)
+net_info
+
+# Creating a directed, weighted network for the perceived value (expertise) data
+net_value <- graph_from_data_frame(edges_value, directed = TRUE, vertices = nodes)
+net_value
+```
+
+```{r}
+#does the network have loops or multiplex ties?
+is_simple(net_info)
+is_simple(net_value)
+
+#does the network have directed ties?
+is_directed(net_info) 
+is_directed(net_value) 
+
+igraph::vcount(net_info)  # 46 nodes
+igraph::ecount(net_info)  # 879 edges
+
+igraph::vcount(net_value) # 46 nodes
+igraph::ecount(net_value) # 858 edges
+```
+
+
+```{r}
+#simplifying both networks by removing self-loops and duplicate ties
+net_info <- simplify(net_info, remove.loops = TRUE, remove.multiple = TRUE)
+net_value <- simplify(net_value, remove.loops = TRUE, remove.multiple = TRUE)
+
+is_simple(net_info)
+is_simple(net_value)
+```
+
+- Both networks return `TRUE` for `is_simple()`, which means there are **no self-loops** (edges from a node to itself) and **no multiplex ties** (multiple edges between the same pair of nodes). 
+- Both networks return `TRUE` for `is_directed()`, indicating that the advice-seeking and value perceptions are **directional**.
+- Both networks contain **46 employees (nodes)**.
+- The information network has **879 directed advice ties**.
+- The value network has **858** directed ties based on **perceived expertise**.
+
+
+## Visualizing the Networks
+
+Next, I'm visualizing both networks. Each node represents an employee. The visualizations help understand how information and perceived expertise flow through the organization.
+
+- **Nodes**
+  - Shape represents **region**:  
+    - Circle = Europe  
+    - Square = USA  
+  - Color represents **gender**:  
+    - Blue = Male  
+    - Beige = Female  
+
+- **Edges**
+  - Directional (with arrows)
+  - Thickness reflects **edge weight** (stronger = more frequent advice or higher perceived value)
+
+These initial visualizations help spot key players, isolate clusters, and explore structural bottlenecks.
+
+
+```{r}
+## Visualization of the Information Flow network
+
+ggraph(net_info, layout = "stress") +  # Stress layout for visually balanced node spacing
+  geom_edge_link0( # Drawing directed edges with arrowheads
+    aes(width = weight), alpha = 0.1, arrow = grid::arrow(angle = 5,
+                                       length = unit(0.1, "in"),
+                                       type = "closed")) +
+  scale_edge_width(range = c(0.1, 1)) +  # Scaling edge width based on weight
+  geom_node_point( # Drawing nodes with shape and color by attributes
+    fill = ifelse(V(net_info)$gender == 1, "lightblue", "beige"),
+    shape = ifelse(V(net_info)$region == 1, 21, 22),
+    size = 5) +
+  geom_node_text( # Adding node labels with reduced opacity
+    aes(label = nodes$ego), 
+    repel = TRUE, size = 3, alpha = 0.5, color = "grey10") +
+ggtitle("Information-Seeking Network (by Region and Gender)") +
+  theme_void() +  # For a clean background
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    legend.position = "none")
+```
+
+```{r}
+## Visualization of the Value-Perception network
+
+ggraph(net_value, layout = "stress") + 
+  geom_edge_link0(
+    aes(width = weight), alpha = 0.1, arrow = grid::arrow(angle = 5,
+                                       length = unit(0.1, "in"),
+                                       type = "closed")) +
+  scale_edge_width(range = c(0.1, 1)) + 
+  geom_node_point( 
+    fill = ifelse(V(net_value)$gender == 1, "lightblue", "beige"),
+    shape = ifelse(V(net_value)$region == 1, 21, 22),
+    size = 5) +
+  geom_node_text( 
+    aes(label = nodes$ego), 
+    repel = TRUE, size = 3, alpha = 0.5, color = "grey10") +
+ggtitle("Value-Perception Network (by Region and Gender)") +
+  theme_void() +  
+  theme(plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    legend.position = "none")
+```
+
+
+
+# Initial Insights
+
+- Both networks are **quite dense**, there seems to be lots of overlapping ties.
+- Some nodes (for instance, 30, 24) are more **isolated**.
+
+Since this data is anonymized, I am going to focus on **group-level attributes** and their network characteristics.
+
+
+# Centrality Measures
+
+## Degree Centrality
+
+Degree Centrality looks at the number of ties for a given node.
+
+Here, since the ties are calculated based on frequency of information/ advice requests, having a high in-degree means more people are coming to the employee for advice/ information. 
+While, having a high out-degree means the employee is asking a lot of people for advice. 
+
+
+```{r}
+## Calculating Degree (Unweighted) for Information Flow
+V(net_info)$deg_total <- igraph::degree(net_info, mode = "all")
+V(net_info)$deg_in <- igraph::degree(net_info, mode = "in")
+V(net_info)$deg_out <- igraph::degree(net_info, mode = "out")
+
+## Calculating Strength (Weighted Degree)
+V(net_info)$strength_total <- igraph::strength(net_info, mode = "all", weights = E(net_info)$weight)
+V(net_info)$strength_in <- igraph::strength(net_info, mode = "in", weights = E(net_info)$weight)
+V(net_info)$strength_out <- igraph::strength(net_info, mode = "out", weights = E(net_info)$weight)
+```
+
+
+```{r}
+## Calculating Degree (Unweighted) for Value Perception
+V(net_value)$deg_total <- igraph::degree(net_value, mode = "all")
+V(net_value)$deg_in <- igraph::degree(net_value, mode = "in")
+V(net_value)$deg_out <- igraph::degree(net_value, mode = "out")
+
+## ⚖Calculating Strength (Weighted Degree)
+V(net_value)$strength_total <- igraph::strength(net_value, mode = "all", weights = E(net_value)$weight)
+V(net_value)$strength_in <- igraph::strength(net_value, mode = "in", weights = E(net_value)$weight)
+V(net_value)$strength_out <- igraph::strength(net_value, mode = "out", weights = E(net_value)$weight)
+```
+
+
+
+```{r}
+# Visualizing above metrics to get a better idea of the graph
+# Degree centrality visualizations
+
+# total degree
+p1 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = deg_total), fill = "skyblue", shape = 21) +
+  ggtitle("Total Degree – Info Network") +
+  theme_void()
+
+p2 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = deg_total), fill = "skyblue", shape = 21) +
+  ggtitle("Total Degree – Value Network") +
+  theme_void()
+
+# in-degree
+p3 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = deg_in), fill = "skyblue", shape = 21) +
+  ggtitle("In-Degree – Info Network") +
+  theme_void()
+
+p4 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = deg_in), fill = "skyblue", shape = 21) +
+  ggtitle("In-Degree – Value Network") +
+  theme_void()
+
+# out degree
+p5 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = deg_out), fill = "skyblue", shape = 21) +
+  ggtitle("Out-Degree – Info Network") +
+  theme_void()
+
+p6 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = deg_out), fill = "skyblue", shape = 21) +
+  ggtitle("Out-Degree – Value Network") +
+  theme_void()
+
+#Display plots
+(p1 | p2) / ( p3 | p4) / ( p5 | p6 ) 
+```
+
+
+Visualizing the graph showed that while there were differences in degree, the **overall structure was densely connected** with no clear standout advisory folks. 
+
+Degree centrality captured how many unique ties each employee had, either seeking advice or being consulted, or both. But the distribution was relatively uniform across the network.
+
+
+```{r}
+# Strength (weighted degree) visualizations
+
+#total strength
+p7 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = strength_total), fill = "pink", shape = 21) +
+  ggtitle("Total-Strength – Info Network") +
+  theme_void()
+
+p8 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = strength_in), fill = "pink", shape = 21) +
+  ggtitle("Total-Strength – Value Network") +
+  theme_void()
+
+#in-strength
+p9 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = strength_in), fill = "pink", shape = 21) +
+  ggtitle("In-Strength – Info Network") +
+  theme_void()
+
+p10 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = strength_in), fill = "pink", shape = 21) +
+  ggtitle("In-Strength – Value Network") +
+  theme_void()
+
+#out-strength
+p11 <- ggraph(net_info, layout = "stress") +
+  geom_node_point(aes(size = strength_out), fill = "pink", shape = 21) +
+  ggtitle("Out-Strength – Info Network") +
+  theme_void()
+
+p12 <- ggraph(net_value, layout = "stress") +
+  geom_node_point(aes(size = strength_out), fill = "pink", shape = 21) +
+  ggtitle("Out-Strength – Value Network") +
+  theme_void()
+
+(p7 | p8) / ( p9 | p10) /( p11 | p12)
+```
+
+
+Visualizing the graph with strength-based centrality showed subtle differences in the **intensity** of ties. Some employees received or gave advice more frequently. However, like degree, strength also appeared broadly distributed. It doesn't show any differentiated central actors.
+
+
+```{r}
+# Merging centralities from both networks
+V(net_info)$ego <- nodes$ego
+
+comparison_df <- data.frame(
+  ego = V(net_info)$ego,
+  info_in = V(net_info)$strength_in,
+  value_in = V(net_value)$strength_in)
+
+# Correlation
+cor.test(comparison_df$info_in, comparison_df$value_in)
+
+ggplot(comparison_df, aes(x = info_in, y = value_in)) +
+  geom_point(color = "#57424a", alpha = 0.7, size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "#EFD9D3") +
+  labs(
+    x = "In-Strength (Advice Frequency)",
+    y = "In-Strength (Perceived Expertise)",
+    title = "Correlation Between Advice Frequency and Perceived Expertise"
+  ) +
+  theme_minimal()
+```
+
+
+## Correlation Between Advice Frequency and Perceived Expertise
+
+To check whether frequency of advice given also reflects perceived expertise, I compared in-strength centrality across both networks. The result showed a strong positive correlation (r = 0.86), indicating that employees who are frequently asked for advice are generally also perceived as highly knowledgeable.
+
+Based on this finding, I focused the remaining analysis on the **Information-Seeking Network**, as it captures the general essence of both advice flow and perceived value for the purpose of understanding influence, access, and structure within the organization.
+
+
+### Attribute-Wise Centrality Analysis
+
+Visualizing the graphs did not show strong individual patterns, so I shifted to analyzing centrality by employee attributes such as role, gender, and location. For instance, whether certain roles are more central or if any structural imbalances exist based on demographic characteristics.
+
+
+```{r}
+V(net_info)$ego <- nodes$ego
+V(net_info)$org_level <- nodes$org_level
+V(net_info)$gender <- nodes$gender
+V(net_info)$region <- nodes$region
+V(net_info)$location <- nodes$location
+
+
+#creating a dataframe to explore attributes and relationship with degree and strength
+node_df <- data.frame(
+  ego = V(net_info)$ego,
+  org_level = V(net_info)$org_level,
+  gender = V(net_info)$gender,
+  region = V(net_info)$region,
+  location = V(net_info)$location,
+  deg_total = V(net_info)$deg_total,
+  deg_in = V(net_info)$deg_in,
+  deg_out = V(net_info)$deg_out,
+  strength_total = V(net_info)$strength_total,
+  strength_in = V(net_info)$strength_in,
+  strength_out = V(net_info)$strength_out  
+)
+```
+
+
+I am visualizing the degree and strength centrality based on attributes. 
+- **Organizational Level**
+- **Gender**
+
+```{r}
+#### Organizational level Degree & Strength Analysis 
+
+#Organizational level mapping to make the visualizations more intuitive
+org_levels <- c("Research Assistant", "Junior Consultant", 
+                "Senior Consultant", "Managing Consultant", "Partner")
+
+node_df$org_label <- factor(node_df$org_level,
+                            levels = 1:5,
+                            labels = org_levels)
+
+## Plotting Organizational-level based in-degree analysis
+p13 = ggplot(node_df, aes(x = factor(org_label), y = deg_in)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  coord_cartesian(ylim = c(0, 50)) +
+  labs(x = "Org Level", y = "In-Degree", title = "In-Degree by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1, vjust = 1))
+
+## Plotting Organizational-level based out-degree analysis
+p14 = ggplot(node_df, aes(x = factor(org_label), y = deg_out)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  coord_cartesian(ylim = c(0, 50)) +
+  labs(x = "Org Level", y = "Out-Degree", title = "Out-Degree by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1, vjust = 1))
+
+## Plotting Organizational-level based in-strength analysis
+p15 = ggplot(node_df, aes(x = factor(org_label), y = strength_in)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  coord_cartesian(ylim = c(0, 100)) +
+  labs(x = "Org Level", y = "In-strength", title = "In-strength by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1, vjust = 1))
+
+## Plotting Organizational-level based out-strength analysis
+p16 = ggplot(node_df, aes(x = factor(org_label), y = strength_out)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  coord_cartesian(ylim = c(0, 100)) +
+  labs(x = "Org Level", y = "Out-strength", title = "Out-strength by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 10, angle = 30, hjust = 1, vjust = 1))
+
+options(repr.plot.width = 16, repr.plot.height = 10)
+
+(p13 | p14) / plot_spacer() / (p15 | p16) + plot_layout(heights = c(1, 0.1, 1))
+
+```
+
+
+The boxplots show clear centrality patterns across organizational levels:
+
+- **Partners** are the most central across all metrics — they are frequently sought after for advice (high in-degree/in-strength) and also actively seek advice from others (high out-degree/out-strength), indicating their dual role as both knowledge providers and active collaborators.
+  
+- **Consultants** show some variability, with some extreme outliers, suggesting that some individuals in these roles are highly central, while others are more peripheral, potentially because of team structure or client assignment. Senior consultants seem to have higher in-degree/ in-strenght and out-degree suggesting they are slightly more collaborative than managing and junior consultants. consistently mid-range, indicating moderate engagement in the advice network.
+
+- **Research Assistants** are the least central across all metrics, with low degree and strength measures. This likely reflects their junior status and limited advice exchanges.
+
+These results reinforce a **hierarchical but participatory structure**, where centrality generally increases with seniority, but variation within roles highlights opportunities for coaching or more structured mentoring.
+
+
+```{r}
+#### Gender-based Degree & Strength Analysis
+
+#Gender mapping to make the visualizations more intuitive
+gender_map <- c("Male", "Female")
+node_df$gender_map <- factor(node_df$gender,
+                            levels = 1:2,
+                            labels = gender_map)
+
+## Plotting Gender-based in-degree analysis
+p17 <- ggplot(node_df, aes(x = gender_map, y = deg_in, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+  #coord_cartesian(ylim = c(0, 50)) +
+  scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "In-Degree", title = "In-Degree by Gender") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+## Plotting Gender-based out-degree analysis
+p18 <- ggplot(node_df, aes(x = gender_map, y = deg_out, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+  #coord_cartesian(ylim = c(0, 50)) +
+  scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "Out-Degree", title = "Out-Degree by Gender") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+## Plotting Gender-based in-strength analysis
+p19 <- ggplot(node_df, aes(x = gender_map, y = strength_in, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+  #coord_cartesian(ylim = c(0, 100)) +
+  scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "In-Strength", title = "In-Strength by Gender") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+## Plotting Gender-based out-strength analysis
+p20 <- ggplot(node_df, aes(x = gender_map, y = strength_out, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+  #coord_cartesian(ylim = c(0, 100)) +
+  scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "Out-Strength", title = "Out-Strength by Gender") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+(p17 | p18) / plot_spacer() / (p19 | p20) + plot_layout(heights = c(1, 0.1, 1))
+
+```
+
+
+
+The boxplots reveal consistent gender differences across both degree and strength centrality measures.
+
+- **Male employees** have higher average in-degree and out-degree, suggesting they are more frequently sought out and more proactive in seeking advice. Their higher in- and out-strength further indicates stronger or more frequent ties across the network.
+
+- **Female employees**, despite having lower average centrality, show **greater variation in in-degree and in-strength**. This suggests that while some are less embedded, others are more central and approachable, possibly due to individual trust, visibility, or role expectations. This could also indicate that employees are more likely to seek advice from certain female colleagues.
+
+It is also important to note the firm’s approximate **4:1 male-to-female ratio**, which may contribute to the observed differences.
+
+These findings raise important considerations around **network inclusivity** and **informal influence**. Some female employees appear to serve as key advice hubs, despite overall lower average.
+
+
+## Closeness Centrality
+
+
+Closeness measures how close a node is to all other nodes in the network. Here, since we're dealing with directed advice netwrok, in- closeness looks at how easily a person can be reached by others for providing/ offering advice, and out-closeness indicates how efficiently a person can reach out to others for advice.
+
+
+```{r}
+## Calculating closeness centrality (weights ignored) and assigning to network object
+V(net_info)$closeness_in <- igraph::closeness(net_info, mode = "in")
+V(net_info)$closeness_out <- igraph::closeness(net_info, mode = "out")
+
+## Adding measures to the node_df dataframe
+node_df$closeness_in <- V(net_info)$closeness_in
+node_df$closeness_out <- V(net_info)$closeness_out
+```
+
+
+Closeness centrality was computed using the **unweighted network**, where each tie is treated equally, regardless of frequency. This approach focuses purely on the structural position of each employee in terms of reachability and accessibility in the advice network.
+
+
+
+```{r}
+#### Organizational level Closeness Analysis 
+
+## Plotting Organizational-level-based in-closeness analysis
+p23 = ggplot(node_df, aes(x = factor(org_label), y = closeness_in)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  labs(x = "Org Level", y = "In-closeness", title = "In-closeness by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 14, angle = 30, hjust = 1, vjust = 1))
+
+## Plotting Organizational-level-based out-closeness analysis
+p24 = ggplot(node_df %>% filter(closeness_out < 0.05), 
+       aes(x = factor(org_label), y = closeness_out)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  labs(x = "Org Level", y = "Out-closeness", title = "Out-closeness by Organizational Level") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 14, angle = 30, hjust = 1, vjust = 1))
+
+options(repr.plot.width = 20, repr.plot.height = 8)
+
+p23 | p24
+```
+
+
+- **In-Closeness** appears to reflect the organizational hierarchy, with more senior roles (e.g., Consultants and Managers) being more reachable. Interestingly, **Partners** show slightly lower in-closeness than expected, which may reflect their advisory or less day-to-day operational role.
+
+- **Out-Closeness** scores are similar across organizational levels, but **Senior Consultants** show a wider range. This suggests variability in how efficiently individuals in that role reach others. possibly influenced by client teams or role flexibility. But in general, employees are able to reach other employees if required.
+
+
+```{r}
+#### Gender based Closeness Analysis 
+
+## Plotting Gender-based in-closeness analysis
+p25 = ggplot(node_df, aes(x = factor(gender_map), y = closeness_in, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+   scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "In-closeness", title = "In-closeness by Gender") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12))
+
+## Plotting Gender-based out-closeness analysis
+p26 = ggplot(node_df %>% filter(closeness_out < 0.05), 
+       aes(x = factor(gender_map), y = closeness_out, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+   scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "Out-closeness", title = "Out-closeness by Gender") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12))
+
+options(repr.plot.width = 16, repr.plot.height = 6)
+
+p25 | p26
+```
+
+- **In-Closeness**, however, shows **greater variation among female employees**, suggesting differences in approachability or visibility within the network. Some women are highly reachable, while others may be more peripheral.
+
+- **Out-Closeness** is consistent across genders, indicating comparable ability to reach others for advice.
+
+
+
+## Betweenness Centrality
+
+
+Betweenness centrality measures how often a person lies on the shortest paths between others.
+
+In this network, betweenness centrality indicates how often a person acts as an information bridge connecting others seeking advice from each other.
+
+
+```{r}
+## Calculating betweenness centrality and assigning to network object
+V(net_info)$betweenness <- igraph::betweenness(net_info, directed = TRUE)
+node_df$betweenness <- V(net_info)$betweenness
+```
+
+
+```{r}
+#### Betweenness Visualizations
+
+#### Organizational level Betweenness Analysis 
+
+## plotting betweenness across organizational levels
+p27 = ggplot(node_df, aes(x = org_label, y = betweenness)) +
+  geom_boxplot(fill = "#EFD9D3", color = "black") +
+  labs(x = "Org Level", y = "Betweenness", title = "Betweenness by Org Level") +
+  theme_minimal()
+
+p27
+
+options(repr.plot.width = 8, repr.plot.height = 4)
+
+```
+
+
+Betweenness centrality varied across roles. 
+
+**Consultants** showed the **widest range**, while **partners** consistently acted as **stable bridges**, suggesting that consultants are unevenly embedded in the network (some act as key brokers, others not) whereas partners maintain a steady position of influence across subgroups.
+
+
+```{r}
+#### Gender based Betweenness Analysis 
+
+## plotting betweenness across Genders
+p28 = ggplot(node_df, aes(x = factor(gender_map), y = betweenness, fill = gender_map)) +
+  geom_boxplot(color = "black") +
+   scale_fill_manual(values = c("Male" = "lightblue", "Female" = "beige")) +
+  labs(x = "Gender", y = "Betweenness", title = "Betweenness by Gender") +
+  theme_minimal()
+
+options(repr.plot.width = 6, repr.plot.height = 6)
+
+p28
+
+```
+
+
+**Male employees had higher and more varied betweenness** than females, though outliers were observed in both groups, suggesting that males more frequently act as intermediaries in advice flow, in comparison with their female counterparts.
+
+
+# Centralization measures
+
+Centralization calculates network-level scores for each centrality measure; these scores help assess whether the advice network is hierarchical or evenly distributed in terms of access, influence, and brokerage
+
+
+```{r}
+# Degree Centralization
+cent_deg <- centr_degree(net_info, mode = "all")$centralization
+# Closeness Centralization
+cent_clo <- centr_clo(net_info, mode = "all")$centralization
+# Betweenness Centralization
+cent_bet <- centr_betw(net_info)$centralization
+# Eigenvector Centralization
+cent_evc <- centr_eigen(net_info)$centralization
+
+round(cent_deg, 2)
+round(cent_clo, 2)
+round(cent_bet, 2)
+round(cent_evc, 2)
+```
+
+
+- **Degree centralization (0.31)** suggests moderate variation in how many people each employee seeks or receives advice from.
+- **Closeness centralization (0.63)** shows advice access is slightly concentrated among a few highly reachable employees.
+- **Betweenness centralization (0.06)** confirms the network does not rely on a single person for advice- multiple advice pathways exist.
+- **Eigenvector centralization (0.43)** indicates influence is uneven, with certain individuals connected to other central players.
+
+
+
+# Structure
+
+## Density, Dyad and Triad Census 
+
+```{r}
+#Edge density
+edge_density(net_info)
+
+#Dyads
+dyad_census(net_info)
+
+#Triads
+net_sna <- asNetwork(net_info)
+sna::triad.census(net_sna)
+colnames(sna::triad.census(net_sna))[which.max(sna::triad.census(net_sna))] #which triad is the most common?
+colnames(sna::triad.census(net_sna))[which.min(sna::triad.census(net_sna))] #which triad is the least common?
+```
+
+
+
+**Density**
+* **Moderately dense** network: nearly 42% of possible advice ties are present.
+
+**Dyads**
+* **Mutual advice ties (327) are common**, which shows reciprocal information sharing.
+* **Nulls still dominate (485)**, suggesting not everyone is connected.
+
+**Triads**
+* Most common triad is 102: **one mutual tie and an isolate**
+* High number of 003 and 012: many dyads are disconnected or have **only one direction of advice**
+* Triads with **full mutual ties** (300, 210) are frequent, indicating small tightly knit groups of mutual advisors
+* **Very few cyclical triads** (030C): advice does not typically circulate in loops
+
+
+## Transitivity
+
+Transitivity refers to the degree to which a relationship between two nodes in a network is also present between the nodes they are connected to.
+
+I also used a CUG (Conditional Uniform Graph) test to determine if the network's structure is statistically different from a random network with the same characteristics. 
+
+
+```{r}
+# Transitivity
+summary(igraph::transitivity(net_info, type = "global"))
+summary(igraph::transitivity(net_info, type = "local", isolates = "zero"))
+
+
+cug.test(net_sna, gtrans, cmode = "edges")
+```
+
+
+The results show that the **network is more clustered than expected by chance**.
+
+The higher-than-expected clustering suggests that employees form informal circles or cliques for advice. While this can foster trust and collaboration, it may also limit access to diverse perspectives if these clusters become too insular.
+
+## Assortativity
+
+Assortativity measures the tendency of employees to connect with others who share similar attributes (e.g., gender, role, or region), revealing patterns of homophily or diversity in advice-seeking behavior.
+
+
+```{r}
+# Assortativity
+## Based on Gender
+assort_gender_d <- igraph::assortativity_nominal(net_info, V(net_info)$gender, directed = TRUE)
+assort_gender_u <- assortativity_nominal(net_info, V(net_info)$gender, directed = FALSE)
+
+## Based on Organizational Level
+assort_org_d <- assortativity_nominal(net_info, V(net_info)$org_level, directed = TRUE)
+assort_org_u <- assortativity_nominal(net_info, V(net_info)$org_level, directed = FALSE)
+
+round(assort_gender_d, 3)
+round(assort_gender_u, 3)
+round(assort_org_d, 3)
+round(assort_org_u, 3)
+```
+
+
+The values suggest there is **no homophily based on gender and organizational level**.
+
+This suggests employees don't necessarily only collaborate or seek advice only with employees with similar attributes (here, gender and organiztional level), highlighting existing collaboratios between genders and various organizational levels.
+
+
+# Clustering and Communities
+
+In this section, I explored the community structure within the advice-seeking network to see whether the network naturally splits into smaller, densely connected groups, or if it's more integrated. 
+
+From a business perspective, this insight can help identify:
+- **Teams or clusters** that collaborate more closely
+- Areas where **cross-functional interaction** could be encouraged
+- Opportunities to **strengthen information flow** across silos (if silos exist)
+
+I chose spinglass because it works well with weighted, undirected networks and is effective for small networks.
+
+```{r}
+#Spinglass with varied resolution parameters
+set.seed(1)
+csg_1 <- cluster_spinglass(net_info, gamma = 0.01)
+length(csg_1)
+round(modularity(csg_1), 3)
+csg_2 <- cluster_spinglass(net_info, gamma = 0.05)
+length(csg_2)
+round(modularity(csg_2), 3)
+csg_3 <- cluster_spinglass(net_info, gamma = 0.1)
+length(csg_3)
+round(modularity(csg_3), 3)
+csg_4 <- cluster_spinglass(net_info, gamma = 0.5)
+length(csg_4)
+round(modularity(csg_4), 3)
+csg_5 <- cluster_spinglass(net_info, gamma = 1)
+length(csg_5)
+round(modularity(csg_5), 3)
+csg_6 <- cluster_spinglass(net_info, gamma = 2)
+length(csg_6)
+round(modularity(csg_6), 3)
+```
+
+
+
+```{r}
+colors <- colorpanel(length(csg_1), low = "lightblue", high = "pink")
+csg_1_plot <- ggraph(net_info, layout = "stress") +
+  geom_edge_link0(color = "black", alpha = .1) +
+  geom_node_point(aes(fill = as.factor(membership(csg_1))),
+                  size = 0.1*(igraph::degree(net_info, mode = "all")), 
+                  color = "black", shape = 21) +
+  scale_fill_manual(values = c(colors)) +
+  theme_void() +
+  geom_node_text(aes(label = as.factor(membership(csg_1))), repel = T) +
+  theme(legend.position = "none")
+
+options(repr.plot.width = 8, repr.plot.height = 6)
+csg_1_plot 
+```
+
+
+
+
+Community detection using the Spinglass algorithm showed that the network operates as a single, tightly connected cluster. 
+
+The **highest modularity (0.280) was achieved at a low resolution (gamma = 0.01)**, indicating limited subgroup structure.
+
+This supports the idea of a collaborative and open information-sharing culture, where **advice flows freely across boundaries** without forming isolated silos.
+
+Even though there is local clustering (triadic closure), the network forms only one clear community. This indicates that advice ties are broadly distributed without distinct group boundaries.
+
+
+
+# Contagion Simulation (Threshold Diffusion)
+
+Contagion analysis helps simulate how ideas, behaviors, or innovations spread through a network over time. In an organizational setting, this could represent the spread of a new policy, training program, or best practice.
+
+Key business questions this addresses include:
+- *If a few employees adopt a new idea, how quickly does it reach others?*
+- *Are there bottlenecks or isolated subgroups that slow down diffusion?*
+- *Is the network structure enabling or hindering the spread of innovation?*
+
+I used a **threshold diffusion model**, where individuals adopt the behavior if a certain proportion of their neighbors have already adopted it.
+
+```{r}
+#Performing Contagion Simulation
+
+# Creating an undirected version of the network (diffusion is mutual)
+un_net <- graph_from_data_frame(edges_info, directed = F, vertices = nodes)
+
+# Converting to adjacency matrix, required for rdiffnet
+net_sna_adj <- as_adjacency_matrix(un_net)
+
+# Defining number of nodes (used internally by rdiffnet)
+n_nodes <- nrow(net_sna_adj)
+
+# Step 4: Running the threshold diffusion model
+set.seed(1)
+
+diffnet_il <- rdiffnet(
+  t = 5, # Simulate over 5 time periods
+  seed.graph = net_sna_adj, # Base network for simulation
+  seed.nodes = "random", # Randomly select initial adopters
+  seed.p.adopt = 0.3, # 50% of the seed nodes start as adopters
+  rewire = F, # No changes to network structure mid-simulation
+  threshold.dist = function(i) 0.25,  # Adoption threshold: adopt if 25% of neighbors do
+  exposure.args = list(normalized = T)  # Normalize exposure for comparability
+)
+
+summary(diffnet_il)
+
+options(repr.plot.width = 12, repr.plot.height = 8)
+plot_diffnet(diffnet_il, slices = c(1, 2, 3, 4, 5))
+
+```
+
+
+Starting with 30% of employees as early adopters, the behavior spread quickly. 85% had adopted it by the second round, and everyone adopted by the third. 
+
+The high hazard rate shows that people were likely to adopt when they saw others doing it. Moran’s I was close to zero, which means the spread wasn’t limited to specific groups, it happened across the network. 
+
+This shows that the **network is well-connected and ideas can spread easily**.
+
+
+# Conclusion and Findings
+
+The advice network in this consulting firm is well-connected, with advice flowing through multiple paths rather than being dependent on a few individuals. While some employees are clearly more central, access to advice appears relatively balanced across the organization. 
+
+The lack of tightly separated groups suggests that employees collaborate across teams, levels, and locations, which is a strong sign of openness and knowledge sharing.
+
+However, the analysis also revealed a few areas for improvement:
+
+**Support key influencers**
+A few employees play a major role in advice flow. These individuals can be formally recognized or mentored into leadership roles to strengthen internal knowledge transfer.
+
+**Encourage more cross-level interaction**
+Some roles tend to seek less advice from others, for instance, Research Assistants. Initiatives like mentoring, cross-functional projects, or rotational programs can break these patterns.
+
+**Watch for extremes**
+A few employees are giving or seeking advice at much higher levels than others. This may be due to specific job roles or team dynamics. It might be worth exploring to avoid overload or dependency.
+
+**Capitalize on strong diffusion**
+The contagion analysis shows that information spreads quickly across the network. This means the company is well-positioned to roll out new ideas or practices efficiently. This is a strategic advantage for internal communication and change management.
+
+Overall, this was an interesting project to work on. The findings from this network analysis, if replicated in real organizations, can offer valuable understanding of how information flows or how a network is sttructured, whether in communication networks, people analytics, or even supply chains (e.g., flow of goods or decisions).
+
+From a **People Analytics** perspective, identifying key individuals and understanding structural patterns can support smarter organizational design. For instance, recognizing central employees or bottlenecks can help optimize communication, mentorship, and collaboration. Network analysis like this holds great potential in **designing more efficient, inclusive, and resilient teams**.
+
+
+## Key Tools & Concepts Applied
+- igraph, ggraph, patchwork, netdiffuseR
+- Centrality, Clustering, Assortativity, Contagion Simulation
+- Group-level attribute analysis and business impact
+
+
+
+
+
+
+
+
+
+
+
+
+
+
